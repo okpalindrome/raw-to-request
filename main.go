@@ -80,8 +80,6 @@ func header_body(lines []string) {
 
 	// request body
 	if count+1 > len(lines) {
-		// Do nothing
-	} else {
 		body := strings.Join(lines[count+1:], "\n")
 
 		body = strings.ReplaceAll(body, "\\", "\\\\") // Replace \ with \\
@@ -89,7 +87,7 @@ func header_body(lines []string) {
 
 		wrapped_body := fmt.Sprintf("$'%s'", body)
 
-		final_curl = append(final_curl, "-b", wrapped_body)
+		final_curl = append(final_curl, "-d", wrapped_body)
 	}
 
 	if !(strings.HasPrefix(url_path_params, "http://") || strings.HasPrefix(url_path_params, "https://")) {
