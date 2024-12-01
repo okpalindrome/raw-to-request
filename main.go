@@ -79,7 +79,7 @@ func header_body(lines []string) {
 	}
 
 	// request body
-	if count+1 > len(lines) {
+	if !(count+1 > len(lines)) {
 		body := strings.Join(lines[count+1:], "\n")
 
 		body = strings.ReplaceAll(body, "\\", "\\\\") // Replace \ with \\
