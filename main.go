@@ -2,134 +2,154 @@ package main
 
 import (
 	"bufio"
-	"flag"
 	"fmt"
 	"os"
 	"regexp"
 	"strings"
 )
 
-var final_curl []string
-var url_path_params string
+var finalCurl []string
+var urlPathParams string
 var host string
 
-func err_check(e error) {
+func errCheck(msg string, e error) {
 	if e != nil {
-		fmt.Print(e)
-		panic(e)
+		fmt.Fprintf(os.Stderr, "%s: %v\n", msg, e)
+	} else {
+		fmt.Fprintln(os.Stderr, msg)
 	}
+	os.Exit(1)
 }
 
-func verb_path_version(line string) {
-	final_curl = append(final_curl, "curl")
+func verbPathVersion(line string) {
+	finalCurl = append(finalCurl, "curl")
 
 	re := regexp.MustCompile(`([^\s]+)`)
 	matches := re.FindAllString(line, 3)
 
-	switch matches[2] {
-	case "HTTP/1.0":
-		final_curl = append(final_curl, "--http1.0")
-	case "HTTP/1.1":
-		final_curl = append(final_curl, "--http1.1")
-	case "HTTP/2":
-		final_curl = append(final_curl, "--http2")
-	case "HTTP/3":
-		final_curl = append(final_curl, "--http3")
+	if len(matches) < 1 {
+		errCheck("[ERROR] Make sure it's a valid raw HTTP request!", nil)
 	}
 
-	final_curl = append(final_curl, "-X", matches[0])
+	switch matches[2] {
+	case "HTTP/1.0":
+		finalCurl = append(finalCurl, "--http1.0")
+	case "HTTP/1.1":
+		finalCurl = append(finalCurl, "--http1.1")
+	case "HTTP/2":
+		finalCurl = append(finalCurl, "--http2")
+	case "HTTP/3":
+		finalCurl = append(finalCurl, "--http3")
+	}
 
-	url_path_params = matches[1]
+	finalCurl = append(finalCurl, "-X", matches[0])
+	urlPathParams = matches[1]
 
 	if strings.HasPrefix(matches[1], "http://") || strings.HasPrefix(matches[1], "https://") {
-		final_curl = append(final_curl, url_path_params)
+		finalCurl = append(finalCurl, urlPathParams)
 	}
 }
 
-func header_body(lines []string) {
-
+func headerBody(lines []string) {
 	var count int
 
 	// headers
-	header_regex := regexp.MustCompile(`([a-zA-Z0-9-]*[a-zA-Z0-9])?:\s*(.*)`)
+	headerRegex := regexp.MustCompile(`([a-zA-Z0-9-]*[a-zA-Z0-9])?:\s*(.*)`)
 	for _, line := range lines {
 		if strings.TrimSpace(line) == "" {
 			break
 		}
-		matches := header_regex.FindAllStringSubmatch(line, -1)
+		matches := headerRegex.FindAllStringSubmatch(line, -1)
 
 		for _, match := range matches {
 			count++
 			if len(match) > 2 {
+				match[2] = strings.ReplaceAll(match[2], "\\", "\\\\")
+				match[2] = strings.ReplaceAll(match[2], "\"", "\\\"")
 
-				match[2] = strings.ReplaceAll(match[2], "\\", "\\\\") // Replace \ with \\
-				match[2] = strings.ReplaceAll(match[2], "\"", "\\\"") // Replace " with \"
-
-				wrapped := fmt.Sprintf("$'%s: %s'", match[1], match[2])
-
-				final_curl = append(final_curl, "-H", wrapped)
+				wrapped := fmt.Sprintf("-H '%s: %s'", match[1], match[2])
+				finalCurl = append(finalCurl, wrapped)
 
 				if match[1] == "Host" {
 					host = strings.TrimSuffix(match[2], "/")
-					// host = match[2]
 				}
 			}
 		}
-
 	}
 
 	// request body
 	if !(count+1 > len(lines)) {
 		body := strings.Join(lines[count+1:], "\n")
-
-		body = strings.ReplaceAll(body, "\\", "\\\\") // Replace \ with \\
-		body = strings.ReplaceAll(body, "\"", "\\\"") // Replace " with \"
-
-		wrapped_body := fmt.Sprintf("$'%s'", body)
-
-		final_curl = append(final_curl, "-d", wrapped_body)
+		body = strings.ReplaceAll(body, "\\", "\\\\")
+		body = strings.ReplaceAll(body, "\"", "\\\"")
+		
+		wrapped := fmt.Sprintf("-d '%s'", body)
+		finalCurl = append(finalCurl, wrapped)
 	}
 
-	if !(strings.HasPrefix(url_path_params, "http://") || strings.HasPrefix(url_path_params, "https://")) {
-		url_path_params = "https://" + host + url_path_params
-		wrapped := fmt.Sprintf("$'%s'", url_path_params)
-		final_curl = append(final_curl, wrapped)
+	if !(strings.HasPrefix(urlPathParams, "http://") || strings.HasPrefix(urlPathParams, "https://")) {
+		urlPathParams = "https://" + host + urlPathParams
+		wrapped := fmt.Sprintf("$'%s'", urlPathParams) // can skip this
+		finalCurl = append(finalCurl, wrapped)
+	}
+}
+
+func readInput() []string {
+	var lines []string
+
+	// Check if there's input from pipe
+	stat, _ := os.Stdin.Stat()
+	if (stat.Mode() & os.ModeCharDevice) == 0 {
+		scanner := bufio.NewScanner(os.Stdin)
+		for scanner.Scan() {
+			lines = append(lines, scanner.Text())
+		}
+		if err := scanner.Err(); err != nil {
+			errCheck("[ERROR] Failed to read from stdin", err)
+		}
+		return lines
 	}
 
+	// If no pipe input, try to read from file argument
+	if len(os.Args) > 1 {
+		filename := os.Args[1]
+		fileinfo, err := os.Stat(filename)
+		if err != nil {
+			errCheck("[ERROR] File does not exist", err)
+		}
+		if fileinfo.IsDir() {
+			errCheck("[ERROR] Directory path, not a file", nil)
+		}
+
+		file, err := os.Open(filename)
+		if err != nil {
+			errCheck("[ERROR] Failed to open file", err)
+		}
+		defer file.Close()
+
+		scanner := bufio.NewScanner(file)
+		for scanner.Scan() {
+			lines = append(lines, scanner.Text())
+		}
+		if err := scanner.Err(); err != nil {
+			errCheck("[ERROR] Failed to read file", err)
+		}
+		return lines
+	}
+
+	fmt.Fprintln(os.Stderr, "Usage: raw2curl <file-path> or pipe input via stdin")
+	os.Exit(1)
+	return nil
 }
 
 func main() {
+	lines := readInput()
 
-	filename := flag.String("file", "", "Raw request file to parse.")
-
-	flag.Usage = func() {
-		fmt.Println("Usage of raw2curl:")
-		flag.PrintDefaults()
+	if len(lines) < 2 {
+		errCheck("[ERROR] Input must contain at least a request line and headers", nil)
 	}
 
-	flag.Parse()
-
-	if *filename == "" {
-		flag.Usage()
-		os.Exit(0)
-	}
-
-	readFile, err := os.Open(*filename)
-	err_check(err)
-
-	fileScanner := bufio.NewScanner(readFile)
-	fileScanner.Split(bufio.ScanLines)
-	var fileLines []string
-
-	for fileScanner.Scan() {
-		fileLines = append(fileLines, fileScanner.Text())
-	}
-
-	defer readFile.Close()
-
-	verb_path_version(fileLines[0])
-
-	header_body(fileLines[1:])
-
-	fmt.Print(strings.Join(final_curl, " "))
+	verbPathVersion(lines[0])
+	headerBody(lines[1:])
+	fmt.Println(strings.Join(finalCurl, " "))
 }
